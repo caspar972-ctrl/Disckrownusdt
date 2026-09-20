@@ -2,9 +2,12 @@ name: Listing Watch
 
 on:
   schedule:
-    # Hurtigst GitHub tillader
     - cron: "*/5 * * * *"
   workflow_dispatch:
+
+concurrency:
+  group: listing-watch
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -33,6 +36,8 @@ jobs:
         run: |
           git config user.name "listing-watch"
           git config user.email "listing-watch@users.noreply.github.com"
+          git pull --rebase origin main || true
           git add seen.json
           git diff --cached --quiet || git commit -m "update seen.json"
-          git push
+          git pull --rebase origin main || true
+          git push || echo "push skipped"
