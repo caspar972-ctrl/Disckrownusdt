@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Free CEX listing watcher: public APIs + announcements -> Discord."""
+"""public APIs + announcements -> Discord."""
 
 from __future__ import annotations
 
