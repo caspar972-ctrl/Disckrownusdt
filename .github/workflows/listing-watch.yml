@@ -28,7 +28,7 @@ jobs:
       - name: Run monitor
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          KROWN_ONLY: ${{ vars.KROWN_ONLY || '0' }}
+          KROWN_ONLY: ${{ vars.KROWN_ONLY || '1' }}
         run: python monitor.py
 
       - name: Save seen.json
