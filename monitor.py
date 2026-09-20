@@ -284,6 +284,82 @@ def fetch_pairs() -> list[dict]:
                 }
             )
 
+    # Bitget spot
+    data = get_json("https://api.bitget.com/api/v2/spot/public/symbols")
+    if data and data.get("data"):
+        for s in data["data"]:
+            out.append(
+                {
+                    "exchange": "Bitget",
+                    "market": "spot",
+                    "symbol": s.get("symbol", ""),
+                    "base": s.get("baseCoin", ""),
+                    "quote": s.get("quoteCoin", ""),
+                    "status": s.get("status", ""),
+                }
+            )
+
+    # Upbit
+    data = get_json("https://api.upbit.com/v1/market/all")
+    if isinstance(data, list):
+        for s in data:
+            market = s.get("market", "")
+            parts = market.split("-", 1)
+            out.append(
+                {
+                    "exchange": "Upbit",
+                    "market": "spot",
+                    "symbol": market,
+                    "base": parts[1] if len(parts) == 2 else market,
+                    "quote": parts[0] if len(parts) == 2 else "",
+                    "status": "online",
+                }
+            )
+
+    # Crypto.com
+    data = get_json(
+        "https://api.crypto.com/exchange/v1/public/get-instruments"
+    )
+    instruments = []
+    if data:
+        instruments = (
+            (data.get("result") or {}).get("data")
+            or (data.get("result") or {}).get("instruments")
+            or []
+        )
+    for s in instruments:
+        out.append(
+            {
+                "exchange": "Crypto.com",
+                "market": s.get("inst_type") or "spot",
+                "symbol": s.get("symbol") or s.get("instrument_name") or "",
+                "base": s.get("base_ccy") or s.get("base_currency") or "",
+                "quote": s.get("quote_ccy") or s.get("quote_currency") or "",
+                "status": s.get("tradable") or "online",
+            }
+        )
+
+    # LBank
+    data = get_json("https://api.lbank.info/v2/currencyPairs.do")
+    pairs = []
+    if isinstance(data, dict):
+        pairs = data.get("data") or []
+    elif isinstance(data, list):
+        pairs = data
+    for raw in pairs:
+        symbol = raw if isinstance(raw, str) else str(raw)
+        parts = symbol.split("_")
+        out.append(
+            {
+                "exchange": "LBank",
+                "market": "spot",
+                "symbol": symbol.upper(),
+                "base": parts[0].upper() if parts else symbol,
+                "quote": parts[1].upper() if len(parts) > 1 else "",
+                "status": "online",
+            }
+        )
+
     return out
 
 
@@ -366,14 +442,21 @@ def main() -> int:
     pairs = fetch_pairs()
     current_keys = {pair_key(p): p for p in pairs}
 
-    # First run: snapshot only, no spam.
+    # Snapshot new exchanges instead of alerting every existing pair.
+    known_exchanges = {k.split("|", 1)[0] for k in known_pairs}
+    current_exchanges = {p["exchange"] for p in current_keys.values()}
+    snapshot_exchanges = current_exchanges - known_exchanges
     first_api_run = len(known_pairs) == 0
     new_pairs = []
     if first_api_run:
         print(f"api snapshot {len(current_keys)} pairs, no alerts this run")
     else:
+        if snapshot_exchanges:
+            print(f"snapshot new exchanges: {sorted(snapshot_exchanges)}")
         for key, p in current_keys.items():
             if key in known_pairs:
+                continue
+            if p["exchange"] in snapshot_exchanges:
                 continue
             text = pair_text(p)
             if krown_only and not is_krown(text):
