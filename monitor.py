@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""public APIs + announcements -> Discord."""
+"""Free CEX listing watcher: public APIs + announcements -> Discord."""
 
 from __future__ import annotations
 
@@ -25,7 +25,10 @@ LISTING_RE = re.compile(
     r"new cryptocurrency listing|adds|trading pair|spot trading)\b",
     re.I,
 )
-KROWN_RE = re.compile(r"krown|krown network|krown coin|\bkrown\b|\bkrwn\b", re.I)
+KROWN_RE = re.compile(
+    r"krown|wkrown|w-krown|krown network|krown coin|krowndex|\bkrwn\b",
+    re.I,
+)
 
 ANNOUNCE_SOURCES = [
     {
@@ -56,6 +59,41 @@ ANNOUNCE_SOURCES = [
         "url": "https://krown.network/",
         "kind": "html",
     },
+    {
+        "name": "Bitget announcements",
+        "url": "https://www.bitget.com/support/sections/12508385025201",
+        "kind": "html",
+    },
+    {
+        "name": "Gate listings",
+        "url": "https://www.gate.io/announcements/newlisted",
+        "kind": "html",
+    },
+    {
+        "name": "MEXC listings",
+        "url": "https://www.mexc.com/announcements/new-listings",
+        "kind": "html",
+    },
+    {
+        "name": "KuCoin listings",
+        "url": "https://www.kucoin.com/announcement/new-listings",
+        "kind": "html",
+    },
+    {
+        "name": "HTX announcements",
+        "url": "https://www.htx.com/support/list/360000039481",
+        "kind": "html",
+    },
+    {
+        "name": "BingX listings",
+        "url": "https://bingx.com/en/support/notice-center",
+        "kind": "html",
+    },
+    {
+        "name": "KrownDEX",
+        "url": "https://krowndex.com/",
+        "kind": "html",
+    },
 ]
 
 
@@ -80,6 +118,16 @@ def get_json(url: str, params: dict | None = None):
         return r.json()
     except Exception as exc:
         print(f"api fail {url}: {exc}", file=sys.stderr)
+        return None
+
+
+def post_json(url: str, payload: dict):
+    try:
+        r = requests.post(url, headers=HEADERS, json=payload, timeout=TIMEOUT)
+        r.raise_for_status()
+        return r.json()
+    except Exception as exc:
+        print(f"api post fail {url}: {exc}", file=sys.stderr)
         return None
 
 
@@ -360,6 +408,330 @@ def fetch_pairs() -> list[dict]:
             }
         )
 
+    # Bitget futures
+    data = get_json(
+        "https://api.bitget.com/api/v2/mix/market/contracts",
+        {"productType": "USDT-FUTURES"},
+    )
+    if data and data.get("data"):
+        for s in data["data"]:
+            out.append(
+                {
+                    "exchange": "Bitget",
+                    "market": "futures",
+                    "symbol": s.get("symbol", ""),
+                    "base": s.get("baseCoin", ""),
+                    "quote": s.get("quoteCoin", ""),
+                    "status": s.get("symbolStatus") or s.get("offTime") or "online",
+                }
+            )
+
+    # Gate futures
+    data = get_json("https://api.gateio.ws/api/v4/futures/usdt/contracts")
+    if isinstance(data, list):
+        for s in data:
+            name = s.get("name") or ""
+            out.append(
+                {
+                    "exchange": "Gate",
+                    "market": "futures",
+                    "symbol": name,
+                    "base": name.split("_")[0] if "_" in name else name,
+                    "quote": "USDT",
+                    "status": "online" if not s.get("in_delisting") else "off",
+                }
+            )
+
+    # HTX / Huobi
+    data = get_json("https://api.huobi.pro/v1/common/symbols")
+    if data and data.get("data"):
+        for s in data["data"]:
+            out.append(
+                {
+                    "exchange": "HTX",
+                    "market": "spot",
+                    "symbol": s.get("symbol", ""),
+                    "base": (s.get("base-currency") or "").upper(),
+                    "quote": (s.get("quote-currency") or "").upper(),
+                    "status": s.get("state", ""),
+                }
+            )
+
+    # BingX spot
+    data = get_json("https://open-api.bingx.com/openApi/spot/v1/common/symbols")
+    symbols = []
+    if data:
+        symbols = (data.get("data") or {}).get("symbols") or data.get("data") or []
+        if isinstance(symbols, dict):
+            symbols = symbols.get("symbols") or []
+    if isinstance(symbols, list):
+        for s in symbols:
+            if not isinstance(s, dict):
+                continue
+            out.append(
+                {
+                    "exchange": "BingX",
+                    "market": "spot",
+                    "symbol": s.get("symbol", ""),
+                    "base": s.get("baseAsset") or s.get("orgQuantityIncrement") or "",
+                    "quote": s.get("quoteAsset", ""),
+                    "status": s.get("status", "online"),
+                }
+            )
+
+    # Gemini
+    data = get_json("https://api.gemini.com/v1/symbols")
+    if isinstance(data, list):
+        for raw in data:
+            symbol = str(raw).upper()
+            out.append(
+                {
+                    "exchange": "Gemini",
+                    "market": "spot",
+                    "symbol": symbol,
+                    "base": symbol,
+                    "quote": "",
+                    "status": "online",
+                }
+            )
+
+    # Bitfinex
+    data = get_json("https://api-pub.bitfinex.com/v2/tickers", {"symbols": "ALL"})
+    if isinstance(data, list):
+        for row in data:
+            if not row or not isinstance(row, list):
+                continue
+            name = str(row[0])
+            if not name.startswith("t"):
+                continue
+            out.append(
+                {
+                    "exchange": "Bitfinex",
+                    "market": "spot",
+                    "symbol": name[1:],
+                    "base": name[1:],
+                    "quote": "",
+                    "status": "online",
+                }
+            )
+
+    # Bithumb
+    data = get_json("https://api.bithumb.com/public/ticker/ALL_KRW")
+    if data and isinstance(data.get("data"), dict):
+        for coin, _info in data["data"].items():
+            if coin == "date":
+                continue
+            out.append(
+                {
+                    "exchange": "Bithumb",
+                    "market": "spot",
+                    "symbol": f"{coin}_KRW",
+                    "base": coin,
+                    "quote": "KRW",
+                    "status": "online",
+                }
+            )
+
+    # Hyperliquid perps
+    data = post_json("https://api.hyperliquid.xyz/info", {"type": "meta"})
+    universe = []
+    if data:
+        universe = data.get("universe") or []
+    for s in universe:
+        name = s.get("name") or ""
+        if not name:
+            continue
+        out.append(
+            {
+                "exchange": "Hyperliquid",
+                "market": "perps",
+                "symbol": name,
+                "base": name,
+                "quote": "USD",
+                "status": "offline" if s.get("isDelisted") else "online",
+            }
+        )
+
+    # Binance COIN-M futures
+    data = get_json("https://dapi.binance.com/dapi/v1/exchangeInfo")
+    if data and data.get("symbols"):
+        for s in data["symbols"]:
+            out.append(
+                {
+                    "exchange": "Binance",
+                    "market": "coin-futures",
+                    "symbol": s.get("symbol", ""),
+                    "base": s.get("baseAsset", ""),
+                    "quote": s.get("quoteAsset", ""),
+                    "status": s.get("status", ""),
+                }
+            )
+
+    # Bybit inverse
+    data = get_json(
+        "https://api.bybit.com/v5/market/instruments-info",
+        {"category": "inverse", "limit": 1000},
+    )
+    if data and data.get("result", {}).get("list"):
+        for s in data["result"]["list"]:
+            out.append(
+                {
+                    "exchange": "Bybit",
+                    "market": "inverse",
+                    "symbol": s.get("symbol", ""),
+                    "base": s.get("baseCoin", ""),
+                    "quote": s.get("quoteCoin", ""),
+                    "status": s.get("status", ""),
+                }
+            )
+
+    # WhiteBIT
+    data = get_json("https://whitebit.com/api/v4/public/markets")
+    if isinstance(data, list):
+        for s in data:
+            out.append(
+                {
+                    "exchange": "WhiteBIT",
+                    "market": s.get("type") or "spot",
+                    "symbol": s.get("name", ""),
+                    "base": s.get("stock", ""),
+                    "quote": s.get("money", ""),
+                    "status": "online" if s.get("tradesEnabled") else "off",
+                }
+            )
+
+    # Poloniex
+    data = get_json("https://api.poloniex.com/markets")
+    if isinstance(data, list):
+        for s in data:
+            out.append(
+                {
+                    "exchange": "Poloniex",
+                    "market": "spot",
+                    "symbol": s.get("symbol", ""),
+                    "base": s.get("baseCurrencyName", ""),
+                    "quote": s.get("quoteCurrencyName", ""),
+                    "status": s.get("state", ""),
+                }
+            )
+
+    # BitMart
+    data = get_json("https://api-cloud.bitmart.com/spot/v1/symbols")
+    if data and isinstance((data.get("data") or {}).get("symbols"), list):
+        for raw in data["data"]["symbols"]:
+            symbol = str(raw)
+            parts = symbol.split("_")
+            out.append(
+                {
+                    "exchange": "BitMart",
+                    "market": "spot",
+                    "symbol": symbol,
+                    "base": parts[0] if parts else symbol,
+                    "quote": parts[1] if len(parts) > 1 else "",
+                    "status": "online",
+                }
+            )
+
+    # CoinEx
+    data = get_json("https://api.coinex.com/v2/spot/market")
+    markets = []
+    if data:
+        markets = data.get("data") or []
+    if isinstance(markets, list):
+        for s in markets:
+            if not isinstance(s, dict):
+                continue
+            out.append(
+                {
+                    "exchange": "CoinEx",
+                    "market": "spot",
+                    "symbol": s.get("market") or s.get("name") or "",
+                    "base": s.get("base_ccy") or "",
+                    "quote": s.get("quote_ccy") or "",
+                    "status": s.get("status") or "online",
+                }
+            )
+
+    # XT
+    data = get_json("https://sapi.xt.com/v4/public/symbol")
+    xt_list = []
+    if data:
+        xt_list = (data.get("result") or {}).get("symbols") or data.get("result") or []
+    if isinstance(xt_list, list):
+        for s in xt_list:
+            if not isinstance(s, dict):
+                continue
+            out.append(
+                {
+                    "exchange": "XT",
+                    "market": "spot",
+                    "symbol": s.get("symbol", ""),
+                    "base": s.get("baseCurrency", ""),
+                    "quote": s.get("quoteCurrency", ""),
+                    "status": s.get("state") or s.get("status") or "online",
+                }
+            )
+
+    # Phemex
+    data = get_json("https://api.phemex.com/public/products")
+    products = []
+    if data:
+        products = (data.get("data") or {}).get("products") or data.get("data") or []
+    if isinstance(products, list):
+        for s in products:
+            if not isinstance(s, dict):
+                continue
+            out.append(
+                {
+                    "exchange": "Phemex",
+                    "market": s.get("type") or "spot",
+                    "symbol": s.get("symbol", ""),
+                    "base": s.get("baseCurrency") or s.get("contractUnderlyingAssets") or "",
+                    "quote": s.get("quoteCurrency", ""),
+                    "status": s.get("status", ""),
+                }
+            )
+
+    # Woo X
+    data = get_json("https://api.woo.org/v1/public/info")
+    rows = []
+    if data:
+        rows = data.get("rows") or data.get("data") or []
+    if isinstance(rows, list):
+        for s in rows:
+            if not isinstance(s, dict):
+                continue
+            out.append(
+                {
+                    "exchange": "WOO",
+                    "market": "spot",
+                    "symbol": s.get("symbol", ""),
+                    "base": s.get("base_asset") or "",
+                    "quote": s.get("quote_asset") or "",
+                    "status": s.get("is_stable") or s.get("status") or "online",
+                }
+            )
+
+    # CoinGecko listed coins named Krown (backup)
+    data = get_json(
+        "https://api.coingecko.com/api/v3/search", {"query": "krown"}
+    )
+    if data and data.get("coins"):
+        for coin in data["coins"][:20]:
+            name = f"{coin.get('name', '')} {coin.get('symbol', '')}"
+            if not KROWN_RE.search(name):
+                continue
+            out.append(
+                {
+                    "exchange": "CoinGecko",
+                    "market": "index",
+                    "symbol": coin.get("symbol", ""),
+                    "base": coin.get("id", ""),
+                    "quote": "",
+                    "status": "listed",
+                }
+            )
+
     return out
 
 
@@ -434,7 +806,7 @@ def main() -> int:
         print("Mangler DISCORD_WEBHOOK_URL", file=sys.stderr)
         return 1
 
-    krown_only = os.environ.get("KROWN_ONLY", "0") == "1"
+    krown_only = os.environ.get("KROWN_ONLY", "1") == "1"
     state = load_state()
     known_pairs: dict = state.get("pairs") or {}
     known_ids = set(state.get("ids") or [])
