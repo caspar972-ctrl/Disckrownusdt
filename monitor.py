@@ -712,6 +712,31 @@ def fetch_pairs() -> list[dict]:
                 }
             )
 
+    # Pionex spot + perps
+    for market_type in ("SPOT", "PERP"):
+        data = get_json(
+            "https://api.pionex.com/api/v1/common/symbols",
+            {"type": market_type},
+        )
+        symbols = []
+        if data:
+            symbols = (data.get("data") or {}).get("symbols") or []
+        if isinstance(symbols, list):
+            for s in symbols:
+                if not isinstance(s, dict):
+                    continue
+                out.append(
+                    {
+                        "exchange": "Pionex",
+                        "market": "futures" if market_type == "PERP" else "spot",
+                        "symbol": s.get("symbol", ""),
+                        "base": s.get("baseCurrency", ""),
+                        "quote": s.get("quoteCurrency", ""),
+                        "status": s.get("status")
+                        or ("online" if s.get("enable") else "off"),
+                    }
+                )
+
     # CoinGecko listed coins named Krown (backup)
     data = get_json(
         "https://api.coingecko.com/api/v3/search", {"query": "krown"}
